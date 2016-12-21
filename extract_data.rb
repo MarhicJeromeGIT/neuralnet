@@ -9,126 +9,121 @@ class NeuralNet
   N = 15 # Neurons in hidden layer
   O = 10 # Neurons in output layer (because we classify between 10 digits)
 
+  class Layer
+    @@layers = 0
+    attr_accessor :activation
+    attr_accessor :error
+    attr_accessor :weights 
+    attr_accessor :biases
+   
+    def initialize(input_size,output_size)
+      @layer_index = @@layers
+      @@layers += 1
+      puts "initializing layer : #{input_size} -> #{output_size}"
+      @output_size = output_size # number of neurons
+      @input_size = input_size
+      @weights = @output_size.times.map do @input_size.times.map do Helpers.rng end end
+      @biases = @output_size.times.map do Helpers.rng end  
+    end
+    
+    def forward(input)
+      abort "forward: inputs size #{input.size} is not #{@input_size}" unless input.size == @input_size
+      #puts "forward : #{@layer_index} #{@input_size} #{@weights.size} #{@biases.size}"
+      
+      @activation = Array.new(@output_size)
+      @error = Array.new(@output_size)
+      (0...@output_size).each do |i|
+        z = Helpers.z input, @weights[i], @biases[i]
+        @activation[i] = Helpers.sigmoid z
+        @error[i] = Helpers.sigmoid_prime z
+      end
+      @activation
+    end
+    
+    def backward(delta)
+      abort "backward: delta size #{delta.size} is not #{output_size}" unless delta.size == @output_size
+      @delta = Helpers.vector_mul( delta, @error)
+      abort "backward: delta is nil" unless @delta
+      @delta
+    end
+
+    # Gradient descente:
+    def SGD(input, lambda = 1.0)
+      abort "SGD: inputs size #{input.size} is not #{@input_size}" unless input.size == @input_size
+      abort "SGD #{@layer_index}: delta is nil" unless @delta
+
+      # see BP4 in the book
+      @weights = (0...@output_size).map do |i|
+        v = @weights[i] # the weights for the ith neurone
+        di = @delta[i]
+        delta = input.map{|val| val * di * lambda }
+        Helpers.vector_diff( v, delta)
+      end
+
+      @biases = (0...@output_size).map do |i|
+        v = @biases[i] # the biases for the ith neurone   
+        di = @delta[i]
+        v - lambda * di
+      end
+    end  
+  end
+
   def initialize( label_filename='train-labels-idx1-ubyte', image_filename='train-images-idx3-ubyte' )
     @labels = Helpers.read_labels(label_filename)
-    @images,@rows,@cols = Helpers.read_images(image_filename,5000)
-    @images,@test_images = @images.each_slice(4000).to_a
+    @images,@rows,@cols = Helpers.read_images(image_filename,60000)
+    @images,@test_images = @images.each_slice(50000).to_a
     @size_input = @rows*@cols    
-    
-    # Initialize neurons with random weights and biases
-    @weights_hidden = N.times.map do @size_input.times.map do Helpers.rng end end
-    @biases_hidden  = N.times.map do Helpers.rng end
 
-    @weights_output = O.times.map do N.times.map do Helpers.rng end end
-    @biases_output = O.times.map do Helpers.rng end
-
-  end
-
-  def print_example
-    5.times do |i|
-      puts @labels[i]
-      puts Helpers.show_img(@images[i],@cols)
-    end
-  end
-
-  def to_s
-    "#{@labels.size} image read. Size is #{@size_input} (#{@rows}x#{@cols})"
+    @layers = Array.new(2)
+    @layers[0] = Layer.new(@rows*@cols, N)
+    @layers[1] = Layer.new(N,10)
   end
 
   def step_for_image idx
-    a_hidden = Array.new(N) #activation
-    e_hidden = Array.new(N) #error
-    abort "wrong weights sizes!" unless @weights_hidden.size == N && @biases_hidden.size == N
-    (0...N).each do |i|
-      z = Helpers.z @images[idx], @weights_hidden[i], @biases_hidden[i]
-      a_hidden[i] = Helpers.sigmoid z
-      e_hidden[i] = Helpers.sigmoid_prime z
-    end
-
-    #now the output layer:
-    a_output = Array.new(O)
-    e_output = Array.new(O)
-    (0...O).each do |i|
-      z = Helpers.z a_hidden, @weights_output[i], @biases_output[i]
-      a_output[i] = Helpers.sigmoid z
-      e_output[i] = Helpers.sigmoid_prime z
-    end
- 
-    # Output error 
+    @activation_hidden = @layers[0].forward @images[idx]
+    @activation_output = @layers[1].forward @activation_hidden
+    
+    # Output error
     # Compute the quadratic error:
     # y : the right answer (what we expect)
     answer_vec = Helpers.answer_vec( @labels[idx] )
-    error_diff = Helpers.vector_diff(a_output,answer_vec)
+    error_diff = Helpers.vector_diff(@activation_output,answer_vec)
     # This is BP1 from the book
-    delta_output = Helpers.vector_mul(e_output, error_diff)
+    @delta = @layers[1].backward error_diff
 
     # Now compute the error on the previous (hidden) layer
     # BP2 in the book
-    delta_hidden = @weights_output.transpose.map do |v|
-       abort "delta_hidden #{v.size} != #{delta_output.size}" unless v.size == delta_output.size
-       Helpers.vector_dot v, delta_output
+    delta_hidden = @layers[1].weights.transpose.map do |v|
+       abort "delta_hidden #{v.size} != #{@delta.size}" unless v.size == @delta.size
+       Helpers.vector_dot v, @delta
     end
-    delta_hidden = Helpers.vector_mul( delta_hidden, e_hidden)
+    @layers[0].backward delta_hidden
 
     # Gradient descente:
     # output layer:
     # see BP4 in the book
-    lambda = 1.0
-    @weights_output = (0...O).map do |i|
-      v = @weights_output[i] # the weights for the ith neurone
-      di = delta_output[i]
-      delta = a_hidden.map{|val| val * di * lambda }
-      Helpers.vector_diff( v, delta)
-    end
-
-    @biases_output = (0...O).map do |i|
-      v = @biases_output[i] # the biases for the ith neurone   
-      delta = delta_output[i]
-      v - lambda * delta
-    end
- 
-    # hidden layer
-    @weights_hidden = (0...N).map do |i|
-      v = @weights_hidden[i] # the weights for the ith neurone
-      di = delta_hidden[i]
-      delta = @images[idx].map{|val| val * di * lambda }
-      Helpers.vector_diff( v, delta)
-    end
-
-    @biases_output = (0...N).map do |i|
-      v = @biases_hidden[i] # the biases for the ith neurone   
-      delta = delta_hidden[i]
-      v - lambda * delta
-    end
-
-
-    a_output
-   
+    @layers[0].SGD @images[idx]
+    @layers[1].SGD @activation_hidden
   end
 
   def test
-    test_size = 1000
+    test_size = 5000
     correct_answers = 0
     (0...@images.size).to_a.sample(test_size).each do |i|
-      r = step_for_image i
+      @activation_hidden = @layers[0].forward @images[i]
+      @activation_output = @layers[1].forward @activation_hidden
+      sorted_results = @activation_output.each_with_index.to_a.sort
       Helpers.show_img @images[i],@cols
-      puts "Image is a #{r.each_with_index.sort.to_a[-1][1]} (or a  #{r.each_with_index.sort.to_a[-2][1]}) (real answer: #{@labels[i]})"
-      #answer_vec = Helpers.answer_vec( @labels[i] )
-      correct_answers += 1 if r.each_with_index.max[1] == @labels[i]
+      puts "Image is a #{sorted_results[-1][1]} (or a  #{sorted_results[-2][1]}) (real answer: #{@labels[i]})"
+      correct_answers += 1 if sorted_results[-1][1] == @labels[i]
     end
     puts "Correct answer rate : #{correct_answers*100/test_size}%"
   end
 
   def learn
-    batch_size = 4000
+    batch_size = 40000
     (0...@images.size).to_a.sample(batch_size).each do |i|
-      # the answer i get
       r = step_for_image i
-      # the real answer
-      #answer_vec = Helpers.answer_vec( @labels[i] )
-
-      #delta_w = N.times.map do @size_input.times.map do 0 end end
-      #delta_b = O.times.map do N.times.map do 0 end end
     end
   end
 end
