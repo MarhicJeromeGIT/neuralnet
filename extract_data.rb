@@ -3,11 +3,14 @@
 require 'sciruby'
 require './helpers'
 require 'pry'
+require 'json'
 
 # http://neuralnetworksanddeeplearning.com/chap1.html
 class NeuralNet
   N = 15 # Neurons in hidden layer
   O = 10 # Neurons in output layer (because we classify between 10 digits)
+  LEARNING_ITERATIONS = 120
+  MINI_BATCH_SAMPLES = 500
 
   class Layer
     @@layers = 0
@@ -16,16 +19,33 @@ class NeuralNet
     attr_accessor :weights 
     attr_accessor :biases
    
-    def initialize(input_size,output_size)
+    def initialize(args)
       @layer_index = @@layers
       @@layers += 1
-      puts "initializing layer : #{input_size} -> #{output_size}"
-      @output_size = output_size # number of neurons
-      @input_size = input_size
-      @weights = @output_size.times.map do @input_size.times.map do Helpers.rng end end
-      @biases = @output_size.times.map do Helpers.rng end  
+      puts "initializing layer : #{args['input_size']} -> #{args['output_size']}"
+      @output_size = args['output_size'] # number of neurons
+      @input_size  = args['input_size']
+      @weights = args['weights'] || @output_size.times.map do @input_size.times.map do Helpers.rng end end
+      @biases  = args['biases'] || @output_size.times.map do Helpers.rng end  
     end
     
+    def to_json arg
+      JSON.generate( { 
+        :input_size => @input_size, 
+        :output_size => @output_size, 
+        :weights => @weights, 
+        :biases => @biases 
+      }) 
+    end
+   
+    def self.from_json layer
+      input_size = layer['input_size']
+      output_size = layer['output_size']
+      weights = layer['weights']
+      biases = layer['biases']
+      Layer.new layer    
+    end
+ 
     def forward(input)
       abort "forward: inputs size #{input.size} is not #{@input_size}" unless input.size == @input_size
       #puts "forward : #{@layer_index} #{@input_size} #{@weights.size} #{@biases.size}"
@@ -68,15 +88,30 @@ class NeuralNet
     end  
   end
 
-  def initialize( label_filename='train-labels-idx1-ubyte', image_filename='train-images-idx3-ubyte' )
-    @labels = Helpers.read_labels(label_filename)
-    @images,@rows,@cols = Helpers.read_images(image_filename,60000)
-    @images,@test_images = @images.each_slice(50000).to_a
-    @size_input = @rows*@cols    
+  def save_to_file filename
+    File.open(filename, 'w') do |f|
+      f.write self.to_json
+    end
+  end
 
-    @layers = Array.new(2)
-    @layers[0] = Layer.new(@rows*@cols, N)
-    @layers[1] = Layer.new(N,10)
+  def self.read_from_file filename
+    net = NeuralNet.new
+    File.open(filename, 'r') do |f|
+      data = JSON.parse f.read
+      net.from_json data
+    end
+    return net
+  end
+
+  def from_json data
+    @layers = Array.new
+    data.each do |l|
+      @layers << Layer.from_json(l)
+    end
+  end
+
+  def to_json 
+   JSON.generate(@layers)   
   end
 
   def step_for_image idx
@@ -94,8 +129,8 @@ class NeuralNet
     # Now compute the error on the previous (hidden) layer
     # BP2 in the book
     delta_hidden = @layers[1].weights.transpose.map do |v|
-       abort "delta_hidden #{v.size} != #{@delta.size}" unless v.size == @delta.size
-       Helpers.vector_dot v, @delta
+      abort "delta_hidden #{v.size} != #{@delta.size}" unless v.size == @delta.size
+      Helpers.vector_dot v, @delta
     end
     @layers[0].backward delta_hidden
 
@@ -106,10 +141,13 @@ class NeuralNet
     @layers[1].SGD @activation_hidden
   end
 
-  def test
-    test_size = 5000
+  def test label_filename, image_filename
+    @labels = Helpers.read_labels(label_filename)
+    @images,@rows,@cols = Helpers.read_images(image_filename)
+    @size_input = @rows*@cols
+
     correct_answers = 0
-    (0...@images.size).to_a.sample(test_size).each do |i|
+    (0...@images.size).each do |i|
       @activation_hidden = @layers[0].forward @images[i]
       @activation_output = @layers[1].forward @activation_hidden
       sorted_results = @activation_output.each_with_index.to_a.sort
@@ -120,23 +158,43 @@ class NeuralNet
     puts "Correct answer rate : #{correct_answers*100/test_size}%"
   end
 
-  def learn
-    batch_size = 40000
-    (0...@images.size).to_a.sample(batch_size).each do |i|
-      r = step_for_image i
+  def learn label_filename, image_filename
+    @labels = Helpers.read_labels(label_filename)
+    @images,@rows,@cols = Helpers.read_images(image_filename)
+    @size_input = @rows*@cols
+    @layers = Array.new(2)
+    @layers[0] = Layer.new({'input_size' => @rows*@cols, 'output_size' => N})
+    @layers[1] = Layer.new({'input_size' => N, 'output_size' => 10})
+
+    (1..LEARNING_ITERATIONS).each do |i|
+       puts "iteration #{i}"
+       (0...@images.count).to_a.sample(MINI_BATCH_SAMPLES).each do |i|
+         step_for_image i
+       end
     end
   end
 end
 
+##########################################################
+
 label_file, image_file = ARGV
-net = NeuralNet.new(label_file, image_file)
-net.learn()
-net.test()
+
+TRAIN = false
+TEST = true
 
 
+if TRAIN
+  puts "start training..."
+  net = NeuralNet.new
+  net.learn label_file, image_file
+  net.save_to_file 'net1'
+  puts "training finished and weights written to file net1"
+end
 
-
-
+if TEST
+  net = NeuralNet.read_from_file 'net1'
+  net.test label_file, image_file
+end
 
 
 
