@@ -5,6 +5,7 @@ require './helpers'
 require 'pry'
 require 'json'
 require './neural_net'
+require 'nyaplot'
 
 label_filename = 'train-labels-idx1-ubyte'
 image_filename = 'train-images-idx3-ubyte'
@@ -18,31 +19,49 @@ max_img = 1
 #answers = labels[0...max_img].map{|l| Helpers.answer_vec(l) }
 #size_output = 10
 
-size_input = 1
-inputs = [[1]]
-answers = [[0]]
-size_output = 1
-weights = [[[0.6]]]
-biases = [[0.9]]
-
+learning_iterations = 300
 puts "start training..."
 net = NeuralNet.new({ 
-  'learning_iterations' => 300, 
+  'learning_iterations' => learning_iterations, 
   'mini_batch_size' => 1,
   'lambda' => 0.15 
 })
 
-net.learn({
-  'inputs'      => inputs,
-  'answers'     => answers,
-  'layers_size' => [size_input,size_output],
-  'weights'     => weights,
-  'biases'      => biases
-}) do |i|
-  # This block is called after each iteration
-  puts "output : #{net.activations.last.map{|v| v.round(2)}.join(',')}"
-  puts "Error : #{(Helpers.vector_length net.output_error).round(2)}"
+plot = Nyaplot::Plot.new
+
+def learn_and_plot net, params
+  error_costs = Array.new
+  net.learn(params) do |i|
+    # This block is called after each iteration
+    #puts "output : #{net.activations.last.map{|v| v.round(2)}.join(',')}"
+    #puts "Error : #{(Helpers.vector_length net.output_error).round(2)}"
+    error_cost = (Helpers.vector_length net.output_error) 
+    puts error_cost
+    error_costs << error_cost
+  end
+  error_costs
 end
+
+params = {
+  'inputs'      => [[1]],
+  'answers'     => [[0]],
+  'layers_size' => [1,1],
+  'weights'     => [[[0.6]]],
+  'biases'      => [[0.9]]
+}
+
+error_cost = learn_and_plot net, params
+plot.add(:scatter, (1..learning_iterations).to_a, error_cost)
+
+# Change some params:
+params['weights'] = [[[2]]]
+params['biases'] = [[2]]
+error_cost = learn_and_plot net, params
+plot.add(:scatter, (1..learning_iterations).to_a, error_cost)
+
+plot.export_html('plot.html')
+
+
 
 net.save_to_file 'net2'
 puts "training finished and weights written to file net2"

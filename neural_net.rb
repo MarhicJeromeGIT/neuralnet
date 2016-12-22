@@ -130,7 +130,6 @@ class NeuralNet
     # Output error
     # Compute the quadratic error:
     # y : the right answer (what we expect)
-    puts "answer: #{answer_vec.join(',')}" 
     @output_error = Helpers.vector_diff(@activations.last,answer_vec)
     delta_error = @output_error
     # We start from the last layer
@@ -176,7 +175,7 @@ class NeuralNet
     @answers = args['answers']
     abort "must provide input and answers" unless @inputs && @answers
     abort "input and answers are not the same size" unless @inputs.count == @answers.count
-
+    
     layers_size = args['layers_size']
     weights = args['weights']
     biases = args['biases'] 
