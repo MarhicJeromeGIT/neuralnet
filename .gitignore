@@ -52,5 +52,7 @@ build-iPhoneSimulator/
 # Don't upload the images/label set
 train-images-idx3-ubyte
 train-labels-idx1-ubyte
-
+t10k-images-idx3-ubyte
+t10k-labels-idx1-ubyte
+*.swp
 

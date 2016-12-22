@@ -1,3 +1,5 @@
+#!/usr/bin/env ruby
+
 require 'sciruby'
 require './helpers'
 require 'pry'
