@@ -5,14 +5,17 @@ require 'json'
 
 # http://neuralnetworksanddeeplearning.com/chap1.html
 class NeuralNet
-  N = 15 # Neurons in hidden layer
-  O = 10 # Neurons in output layer (because we classify between 10 digits)
   LEARNING_ITERATIONS_DEFAULT = 120
   MINI_BATCH_SAMPLES_DEFAULT  = 500
+  LAMBDA_DEFAULT = 1.0 #the learning rate
+
+  attr_accessor :activations
+  attr_accessor :output_error
 
   def initialize args={}
+    @lambda              = args['lambda'] || LAMBDA_DEFAULT
     @learning_iterations = args['learning_iterations'] || LEARNING_ITERATIONS_DEFAULT
-    @mini_batch_size = args['mini_batch_size'] || MINI_BATCH_SAMPLES_DEFAULT   
+    @mini_batch_size     = args['mini_batch_size'] || MINI_BATCH_SAMPLES_DEFAULT   
   end
 
   class Layer
@@ -21,15 +24,19 @@ class NeuralNet
     attr_accessor :error
     attr_accessor :weights 
     attr_accessor :biases
+    attr_accessor :input_size
+    attr_accessor :output_size
    
-    def initialize(args)
+    def initialize args
       @layer_index = @@layers
       @@layers += 1
-      puts "initializing layer : #{args['input_size']} -> #{args['output_size']}"
+      puts "initializing layer #{@layer_index}: #{args['input_size']} -> #{args['output_size']}"
       @output_size = args['output_size'] # number of neurons
       @input_size  = args['input_size']
       @weights = args['weights'] || @output_size.times.map do @input_size.times.map do Helpers.rng end end
-      @biases  = args['biases'] || @output_size.times.map do Helpers.rng end  
+      abort "wrong weights size" unless @weights.size == @output_size && @weights[0].size == @input_size
+      @biases  = args['biases'] || @output_size.times.map do Helpers.rng end 
+      abort "wrong bias size" unless @biases.size == @output_size 
     end
     
     def to_json arg
@@ -42,10 +49,6 @@ class NeuralNet
     end
    
     def self.from_json layer
-      input_size = layer['input_size']
-      output_size = layer['output_size']
-      weights = layer['weights']
-      biases = layer['biases']
       Layer.new layer    
     end
  
@@ -71,10 +74,10 @@ class NeuralNet
     end
 
     # Gradient descente:
-    def SGD(input, lambda = 1.0)
+    def SGD(input, lambda)
       abort "SGD: inputs size #{input.size} is not #{@input_size}" unless input.size == @input_size
       abort "SGD #{@layer_index}: delta is nil" unless @delta
-
+      
       # see BP4 in the book
       @weights = (0...@output_size).map do |i|
         v = @weights[i] # the weights for the ith neurone
@@ -117,35 +120,37 @@ class NeuralNet
    JSON.generate(@layers)   
   end
 
-  def step_for_image idx
-    @activation_hidden = @layers[0].forward @images[idx]
-    @activation_output = @layers[1].forward @activation_hidden
+  def step_for_image input, answer_vec
+    @activations = Array.new
+    @activations << input 
+    @layers.each do |layer|
+      @activations << (layer.forward @activations.last)
+    end
     
     # Output error
     # Compute the quadratic error:
     # y : the right answer (what we expect)
-    answer_vec = Helpers.answer_vec( @labels[idx] )
-    error_diff = Helpers.vector_diff(@activation_output,answer_vec)
-    # This is BP1 from the book
-    @delta = @layers[1].backward error_diff
-
-    # Now compute the error on the previous (hidden) layer
-    # BP2 in the book
-    delta_hidden = @layers[1].weights.transpose.map do |v|
-      abort "delta_hidden #{v.size} != #{@delta.size}" unless v.size == @delta.size
-      Helpers.vector_dot v, @delta
+    puts "answer: #{answer_vec.join(',')}" 
+    @output_error = Helpers.vector_diff(@activations.last,answer_vec)
+    delta_error = @output_error
+    # We start from the last layer
+    @layers.reverse.each do |layer|
+      delta_error = layer.backward delta_error
+      delta_error = layer.weights.transpose.map do |v|
+        abort "delta_hidden #{v.size} != #{delta_error.size}" unless v.size == delta_error.size
+        Helpers.vector_dot v, delta_error
+      end
     end
-    @layers[0].backward delta_hidden
 
     # Gradient descente:
     # output layer:
     # see BP4 in the book
-    @layers[0].SGD @images[idx]
-    @layers[1].SGD @activation_hidden
-    nil
+    (0...@layers.size).each do |i|
+      @layers[i].SGD @activations[i], @lambda
+    end
   end
 
-  def test label_filename, image_filename, max_img
+  def test label_filename, image_filename, max_img=nil
     @labels = Helpers.read_labels(label_filename)
     @images,@rows,@cols = Helpers.read_images(image_filename, max_img)
     @size_input = @rows*@cols
@@ -156,26 +161,45 @@ class NeuralNet
       @activation_hidden = @layers[0].forward @images[i]
       @activation_output = @layers[1].forward @activation_hidden
       sorted_results = @activation_output.each_with_index.to_a.sort
-      #Helpers.show_img @images[i],@cols
-      puts "Image is a #{sorted_results[-1][1]} (or a  #{sorted_results[-2][1]}) (real answer: #{@labels[i]})"
-      correct_answers += 1 if sorted_results[-1][1] == @labels[i]
+      if sorted_results[-1][1] == @labels[i]
+        correct_answers += 1
+      else
+        Helpers.show_img @images[i],@cols
+        puts "Image is a #{sorted_results[-1][1]} (or a  #{sorted_results[-2][1]}) (real answer: #{@labels[i]})"
+      end
     end
     puts "Correct answer rate : #{correct_answers*100/test_size}%"
   end
 
-  def learn label_filename, image_filename, max_img=nil
-    @labels = Helpers.read_labels(label_filename)
-    @images,@rows,@cols = Helpers.read_images(image_filename, max_img)
-    @size_input = @rows*@cols
-    @layers = Array.new(2)
-    @layers[0] = Layer.new({'input_size' => @rows*@cols, 'output_size' => N})
-    @layers[1] = Layer.new({'input_size' => N, 'output_size' => 10})
+  def learn args
+    @inputs = args['inputs']
+    @answers = args['answers']
+    abort "must provide input and answers" unless @inputs && @answers
+    abort "input and answers are not the same size" unless @inputs.count == @answers.count
+
+    layers_size = args['layers_size']
+    weights = args['weights']
+    biases = args['biases'] 
+    @layers = Array.new()
+    (0...layers_size.count-1).each do |i|
+      @layers << (Layer.new({
+                    'input_size'  => layers_size[i], 
+                    'output_size' => layers_size[i+1],
+                    'weights'     => weights&.at(i),
+                    'biases'      => biases&.at(i)
+                 }))
+    end
+
+    # Some verifications :
+    abort "layer size must be >= 2" unless layers_size.count >= 2
+    abort "wrong first layer size" unless @inputs[0].count == @layers[0].input_size
+    abort "wrong last layer size" unless @answers[0].count == @layers[-1].output_size
 
     (1..@learning_iterations).each do |i|
-       puts "iteration #{i}"
-       (0...@images.count).to_a.sample(@mini_batch_size).each do |i|
-         step_for_image i
-       end
+       (0...@inputs.count).to_a.sample(@mini_batch_size).each do |i|
+         step_for_image @inputs[i], @answers[i]
+         yield i
+      end
     end
   end
 end
